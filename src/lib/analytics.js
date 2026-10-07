@@ -88,8 +88,12 @@ export async function getAnalyticsSnapshot(discoveryData, allKeys, env) {
   for (const pairKey in dbStates) {
     const row = dbStates[pairKey];
     if (row.status === "KEY_ERR") deadKeysFromDb.add(row.key_id);
-    if (row.status === "404") deadModelsFromDb[row.model] = "404";
-    if (row.status === "limit: 0") deadModelsFromDb[row.model] = "limit: 0";
+    if (row.status === "404" && (now - row.updated_at < DAY_HOURS_MS)) {
+      deadModelsFromDb[row.model] = "404";
+    }
+    if (row.status === "limit: 0" && (now - row.updated_at < DAY_HOURS_MS)) {
+      deadModelsFromDb[row.model] = "limit: 0";
+    }
   }
 
   for (const model of uniqueModels) {

@@ -58,12 +58,19 @@ async function ensureDeadState(env) {
     `).all();
 
     if (results && results.length > 0) {
+      const now = Date.now();
       for (const row of results) {
         const { model, key_id, status, updated_at } = row;
         if (status === "404") {
-          deadModels.set(model, "404");
+          // Кэшируем 404 на 24 часа для автоперепроверки в новые сутки
+          if (now - updated_at < DAY_HOURS_MS) {
+            deadModels.set(model, "404");
+          }
         } else if (status === "limit: 0") {
-          deadModels.set(model, "limit: 0");
+          // Кэшируем limit: 0 на 24 часа
+          if (now - updated_at < DAY_HOURS_MS) {
+            deadModels.set(model, "limit: 0");
+          }
         } else if (status === "KEY_ERR") {
           deadKeys.add(key_id);
         } else if (status === "RPD") {
