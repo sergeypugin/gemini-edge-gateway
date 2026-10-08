@@ -1,0 +1,3 @@
+ALTER TABLE logs ADD COLUMN ttfb_ms INTEGER;
+ALTER TABLE logs ADD COLUMN response_ms INTEGER;
+ALTER TABLE logs DROP COLUMN duration_ms;
