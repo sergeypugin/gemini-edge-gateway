@@ -27,7 +27,7 @@
 - скопируйте и сохраните это значение
 
 > [!note]
-> Выполнять SQL-команды создания таблиц вручную не требуется. Файл `schema.sql` автоматически применится к созданной базе данных в процессе первого развертывания через GitHub Actions.
+> SQL-команды вручную выполнять не требуется. При деплое GitHub Actions применит исходную схему из `db/schema.sql`, затем все ещё не применённые файлы из `db/migrations/` через Wrangler D1 migrations и только после этого развернёт Worker. Wrangler записывает применённые migration-файлы в таблицу `d1_migrations`, поэтому существующие форки получат миграцию один раз при первом синке.
 
 > [!tip]
 > ***На будущее***. Если вам когда-нибудь понадобится посмотреть полный ответ логов (включая подробные JSON-дампы ошибок с лимитами или кодами ответов Google API в колонке `details`), это можно сделать двумя способами:
@@ -40,12 +40,12 @@
 > Если у вас установлен NodeJS, вы можете отправлять SQL-запросы прямо из терминала (внутри папки проекта):
 > ```bash
 > # Выполнить SQL-запрос удаленно
-> npx wrangler d1 execute gemini-gateway-db --remote --command "SELECT timestamp, level, message, model, key_id, status, duration_ms FROM logs ORDER BY timestamp DESC LIMIT 100;"
+> npx wrangler d1 execute gemini-gateway-db --remote --command "SELECT timestamp, level, message, model, key_id, status, ttfb_ms, response_ms FROM logs ORDER BY timestamp DESC LIMIT 100;"
 > ```
 >
 > Пример полезного SQL-запроса для вывода последних 100 логов:
 > ```sql
-> SELECT timestamp, level, message, model, key_id, status, duration_ms, details
+> SELECT timestamp, level, message, model, key_id, status, ttfb_ms, response_ms, details
 > FROM logs
 > ORDER BY timestamp DESC
 > LIMIT 100;
