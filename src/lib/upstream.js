@@ -1,4 +1,5 @@
 export async function fetchWithStreamTimeout(url, options, timeoutMs = 60000) {
+  const startTime = Date.now();
   const controller = new AbortController();
   const timeoutError = () => new DOMException("Upstream response timed out", "TimeoutError");
   let timer;
@@ -20,7 +21,7 @@ export async function fetchWithStreamTimeout(url, options, timeoutMs = 60000) {
     const response = await fetch(url, { ...options, signal: controller.signal });
     if (!response.body) {
       cleanup();
-      return response;
+      return { response, ttfbMs: null, responseCompletion: Promise.resolve(null) };
     }
     reader = response.body.getReader();
     const read = async () => {
@@ -37,7 +38,18 @@ export async function fetchWithStreamTimeout(url, options, timeoutMs = 60000) {
       }
     };
     let first = await read();
+    while (!first.done && first.value.byteLength == 0) first = await read();
     clearTimeout(timer);
+    const ttfbMs = first.done ? null : Date.now() - startTime;
+    const responseStartTime = ttfbMs == null ? null : Date.now();
+    let resolveResponseCompletion;
+    let responseCompleted = false;
+    const responseCompletion = new Promise(resolve => { resolveResponseCompletion = resolve; });
+    const completeResponse = value => {
+      if (responseCompleted) return;
+      responseCompleted = true;
+      resolveResponseCompletion(value);
+    };
     const body = new ReadableStream({
       async pull(streamController) {
         try {
@@ -52,12 +64,14 @@ export async function fetchWithStreamTimeout(url, options, timeoutMs = 60000) {
           }
           if (chunk.done) {
             cleanup();
+            completeResponse(responseStartTime == null ? null : Date.now() - responseStartTime);
             streamController.close();
           } else {
             streamController.enqueue(chunk.value);
           }
         } catch (err) {
           cleanup();
+          completeResponse(null);
           controller.abort(err);
           await reader.cancel(err).catch(() => { });
           streamController.error(err);
@@ -65,13 +79,18 @@ export async function fetchWithStreamTimeout(url, options, timeoutMs = 60000) {
       },
       async cancel(reason) {
         cleanup();
+        completeResponse(null);
         controller.abort(reason);
         await reader.cancel(reason).catch(() => { });
       },
     });
-    return new Response(body, {
-      status: response.status, statusText: response.statusText, headers: response.headers,
-    });
+    return {
+      response: new Response(body, {
+        status: response.status, statusText: response.statusText, headers: response.headers,
+      }),
+      ttfbMs,
+      responseCompletion,
+    };
   } catch (err) {
     cleanup();
     if (reader) await reader.cancel(err).catch(() => { });

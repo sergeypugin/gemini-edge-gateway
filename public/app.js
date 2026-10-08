@@ -270,7 +270,8 @@ function renderNextLogsChunk() {
       localTime = isNaN(d.getTime()) ? timestamp : d.toLocaleTimeString();
     }
     const level = ["success", "warn", "error"].includes(l.level) ? l.level : "error";
-    const duration = l.durationMs != null ? displayText(l.durationMs, 24) + "ms" : "--";
+    const ttfb = l.ttfbMs != null ? displayText(l.ttfbMs, 24) + "ms" : "-";
+    const response = l.responseMs != null ? displayText(l.responseMs, 24) + "ms" : "-";
 
     return `<tr>
       <td>${escapeCell(localTime, 40)}</td>
@@ -279,7 +280,8 @@ function renderNextLogsChunk() {
       <td>${escapeCell(l.model || "--", 120)}</td>
       <td>${escapeCell(l.key || "--", 120)}</td>
       <td>${escapeCell(l.status ?? "--", 24)}</td>
-      <td>${escapeCell(duration, 26)}</td>
+      <td>${escapeCell(ttfb, 26)}</td>
+      <td>${escapeCell(response, 26)}</td>
     </tr>`;
   }).join("");
 
@@ -293,7 +295,7 @@ function sortLogs(col, toggle = true) {
       currentSortDir = currentSortDir === "asc" ? "desc" : "asc";
     } else {
       currentSortCol = col;
-      currentSortDir = (col === "timestamp" || col === "durationMs") ? "desc" : "asc";
+      currentSortDir = (col === "timestamp" || col === "ttfbMs" || col === "responseMs") ? "desc" : "asc";
     }
   }
 
@@ -310,7 +312,7 @@ function sortLogs(col, toggle = true) {
       return currentSortDir === "asc" ? timeA - timeB : timeB - timeA;
     }
 
-    if (col === "status" || col === "durationMs") {
+    if (col === "status" || col === "ttfbMs" || col === "responseMs") {
       const numA = Number(valA) || 0;
       const numB = Number(valB) || 0;
       return currentSortDir === "asc" ? numA - numB : numB - numA;
