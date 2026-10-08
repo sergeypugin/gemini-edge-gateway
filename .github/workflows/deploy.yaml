@@ -60,7 +60,7 @@ jobs:
           GATEWAY_D1_ID: ${{ secrets.GATEWAY_D1_ID }}
         run: |
           if [ -n "$GATEWAY_D1_ID" ]; then
-            npx wrangler d1 migrations apply gemini-gateway-db --remote --yes
+            npx wrangler d1 migrations apply gemini-gateway-db --remote
           fi
 
       - name: Deploy
