@@ -1,5 +1,6 @@
 import { createGeminiStreamPipeline } from "./stream.js";
 import { addMissingToolSignatures } from "./tool-signatures.js";
+import { fetchWithStreamTimeout } from "./upstream.js";
 import { recordSuccess } from "./analytics.js";
 import { logSuccess, logWarn, logError, getPersistentLogs } from "./logger.js";
 import {
@@ -196,15 +197,15 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
       const startTime = Date.now();
 
       try {
-        const response = await fetch(DEFAULT_GOOGLE_ENDPOINT, {
+        const response = await fetchWithStreamTimeout(DEFAULT_GOOGLE_ENDPOINT, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${keyItem.key}`,
           },
           body: payload,
-          signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
-        });
+          signal: request.signal,
+        }, ATTEMPT_TIMEOUT_MS);
 
         const durationMs = Date.now() - startTime;
 
@@ -321,7 +322,11 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         }
 
         const streamPipeline = createGeminiStreamPipeline();
-        response.body.pipeTo(streamPipeline.writable).catch(() => { });
+        response.body.pipeTo(streamPipeline.writable).catch((err) => {
+          if (!request.signal.aborted) {
+            logWarn(model, keyItem.id, 0, "Upstream stream interrupted", err, Date.now() - startTime, env, ctx);
+          }
+        });
 
         const headers = new Headers(response.headers);
         headers.delete("content-length");
@@ -333,7 +338,8 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         });
 
       } catch (err) {
-        const isTimeout = err?.name === "TimeoutError" || err?.name === "AbortError";
+        if (request.signal.aborted) throw err;
+        const isTimeout = err?.name == "TimeoutError";
         const durationMs = Date.now() - startTime;
         if (isTimeout) {
           modelCooldowns[model] = Date.now() + DEFAULT_TIMEOUT_DELAY_MS;
