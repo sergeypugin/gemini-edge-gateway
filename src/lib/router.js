@@ -1,4 +1,5 @@
 import { createGeminiStreamPipeline } from "./stream.js";
+import { addMissingToolSignatures } from "./tool-signatures.js";
 import { recordSuccess } from "./analytics.js";
 import { logSuccess, logWarn, logError, getPersistentLogs } from "./logger.js";
 import {
@@ -121,34 +122,7 @@ function prepareSanitizedTemplate(rawText) {
 
   let fullText = metaZone + dataZone;
 
-  fullText = fullText.replace(
-    /"tool_calls"\s*:\s*(\[\s*\{[\s\S]*?\}\s*\])(?=\s*[,}])/g,
-    (match, arrayStr) => {
-      try {
-        const calls = JSON.parse(arrayStr);
-        if (Array.isArray(calls)) {
-          let modified = false;
-          for (const call of calls) {
-            if (call.type === "function") {
-              const hasSig = call.extra_content?.google?.thought_signature;
-              if (!hasSig) {
-                if (!call.extra_content) call.extra_content = {};
-                if (!call.extra_content.google) call.extra_content.google = {};
-                call.extra_content.google.thought_signature = "skip_thought_signature_validator";
-                modified = true;
-              }
-            }
-          }
-          if (modified) {
-            return `"tool_calls":${JSON.stringify(calls)}`;
-          }
-        }
-      } catch { }
-      return match;
-    }
-  );
-
-  return fullText;
+  return addMissingToolSignatures(fullText);
 }
 
 export function getRouterLiveState() {
