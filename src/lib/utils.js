@@ -1,3 +1,5 @@
+import { isThoughtSignatureError } from "./errors.js";
+
 export const ONE_HOUR_MS = 60 * 60 * 1000;
 export const DAY_HOURS_MS = 24 * 60 * 60 * 1000;
 export const COOLDOWN_503_MS = 10 * 1000;
@@ -29,15 +31,19 @@ export function parseRetryDelayMs(retryDelayStr, defaultMs = DEFAULT_RPM_DELAY_M
 }
 
 export function classifyGoogleError(statusCode, errorObj) {
-  const status = errorObj?.status || "";
-  const message = errorObj?.message || "";
+  const status = typeof errorObj?.status == "string" ? errorObj.status : "";
+  const message = typeof errorObj?.message == "string" ? errorObj.message : "";
   const lowerMessage = message.toLowerCase();
+
+  if (isThoughtSignatureError(message)) {
+    return { type: "THOUGHT_SIGNATURE" };
+  }
 
   if (statusCode === 404 || status === "NOT_FOUND") {
     return { type: "NOT_FOUND" };
   }
 
-  if (lowerMessage.includes("valid API key") || statusCode === 401 || statusCode === 403 || status === "PERMISSION_DENIED" || status === "UNAUTHENTICATED") {
+  if (lowerMessage.includes("valid api key") || statusCode === 401 || statusCode === 403 || status === "PERMISSION_DENIED" || status === "UNAUTHENTICATED") {
     return { type: "AUTH" };
   }
 
@@ -49,12 +55,12 @@ export function classifyGoogleError(statusCode, errorObj) {
     return { type: "UNAVAILABLE" };
   }
 
-  const details = errorObj?.details || [];
-  const quotaFailures = details.filter((d) => d["@type"]?.includes("QuotaFailure"));
-  const violations = quotaFailures.flatMap((q) => q.violations || []);
+  const details = Array.isArray(errorObj?.details) ? errorObj.details : [];
+  const quotaFailures = details.filter((d) => typeof d?.["@type"] == "string" && d["@type"].includes("QuotaFailure"));
+  const violations = quotaFailures.flatMap((q) => Array.isArray(q.violations) ? q.violations : []);
 
-  const quotaIds = violations.map((v) => (v.quotaId || "").toLowerCase()).join(" ");
-  const quotaMetrics = violations.map((v) => (v.quotaMetric || "").toLowerCase()).join(" ");
+  const quotaIds = violations.map((v) => typeof v?.quotaId == "string" ? v.quotaId.toLowerCase() : "").join(" ");
+  const quotaMetrics = violations.map((v) => typeof v?.quotaMetric == "string" ? v.quotaMetric.toLowerCase() : "").join(" ");
 
   if (statusCode === 429 || status === "RESOURCE_EXHAUSTED") {
     const isTpm = quotaIds.includes("tokenspermodelperminute") || quotaMetrics.includes("input_token_count");

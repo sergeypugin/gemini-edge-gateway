@@ -1,6 +1,21 @@
+import { MAX_LOG_FIELD_LENGTH, normalizeErrorMessage, redactText, sanitizeErrorDetails } from "./errors.js";
+
 const MAX_MEMORY_LOGS = 1000;
 const MAX_PERSISTED_LOGS = 200;
 let memoryLogs = [];
+
+function publicLogEntry(entry) {
+  const level = ["success", "warn", "error"].includes(entry.level) ? entry.level : "error";
+  return {
+    timestamp: redactText(entry.timestamp, 40),
+    level,
+    message: level == "success" ? "Success" : normalizeErrorMessage(entry.message, entry.status),
+    model: redactText(entry.model, MAX_LOG_FIELD_LENGTH),
+    key: redactText(entry.key, MAX_LOG_FIELD_LENGTH),
+    status: typeof entry.status == "number" && Number.isFinite(entry.status) ? entry.status : redactText(entry.status, 24),
+    durationMs: typeof entry.durationMs == "number" && Number.isFinite(entry.durationMs) ? entry.durationMs : null,
+  };
+}
 
 // Сохранение лога в SQLite базу D1
 async function persistLogEntry(entry, env) {
@@ -20,12 +35,12 @@ async function persistLogEntry(entry, env) {
       entry.details ? JSON.stringify(entry.details) : null
     ).run();
   } catch (err) {
-    console.error("D1 persistLogEntry error:", err);
+    console.error("D1 log persistence failed");
   }
 }
 
 function pushMemoryLog(entry) {
-  memoryLogs.unshift(entry);
+  memoryLogs.unshift(publicLogEntry(entry));
   if (memoryLogs.length > MAX_MEMORY_LOGS) {
     memoryLogs.pop();
   }
@@ -37,14 +52,14 @@ export function logSuccess(model, keyId, durationMs, env = null, ctx = null) {
     timestamp: new Date().toISOString(),
     level: "success",
     message: "Success",
-    model,
-    key: keyId,
+    model: redactText(model, MAX_LOG_FIELD_LENGTH),
+    key: redactText(keyId, MAX_LOG_FIELD_LENGTH),
     status: 200,
-    durationMs,
+    durationMs: typeof durationMs == "number" && Number.isFinite(durationMs) ? durationMs : null,
   };
 
   pushMemoryLog(entry);
-  console.log(`[${entry.timestamp}] [SUCCESS] ${model} (${keyId}) in ${durationMs}ms`);
+  console.log(`[${entry.timestamp}] [SUCCESS] ${entry.model} (${entry.key}) in ${entry.durationMs}ms`);
 
   if (env?.DB && ctx?.waitUntil) {
     ctx.waitUntil(persistLogEntry(entry, env));
@@ -53,18 +68,13 @@ export function logSuccess(model, keyId, durationMs, env = null, ctx = null) {
 
 export function logWarn(model, keyId, status, message, rawDetails = null, durationMs = null, env = null, ctx = null) {
   const entry = {
+    ...publicLogEntry({ level: "warn", message, model, key: keyId, status, durationMs }),
     timestamp: new Date().toISOString(),
-    level: "warn",
-    message,
-    model,
-    key: keyId,
-    status,
-    details: rawDetails,
-    durationMs,
+    details: sanitizeErrorDetails(message, rawDetails),
   };
 
   pushMemoryLog(entry);
-  console.warn(`[${entry.timestamp}] [WARN] ${model} (${keyId}) -> ${status} ${message} in ${durationMs != null ? durationMs + 'ms' : 'N/A'}`);
+  console.warn(`[${entry.timestamp}] [WARN] ${entry.model} (${entry.key}) -> ${entry.status} ${entry.message} in ${entry.durationMs != null ? entry.durationMs + 'ms' : 'N/A'}`);
 
   if (env?.DB && ctx?.waitUntil) {
     ctx.waitUntil(persistLogEntry(entry, env));
@@ -74,15 +84,13 @@ export function logWarn(model, keyId, status, message, rawDetails = null, durati
 // Критический отказ шлюза
 export function logError(message, status = 429, rawDetails = null, env = null, ctx = null) {
   const entry = {
+    ...publicLogEntry({ level: "error", message, status }),
     timestamp: new Date().toISOString(),
-    level: "error",
-    message,
-    status,
-    details: rawDetails,
+    details: sanitizeErrorDetails(message, rawDetails),
   };
 
   pushMemoryLog(entry);
-  console.error(`[${entry.timestamp}] [ERROR] ${message} (${status})`);
+  console.error(`[${entry.timestamp}] [ERROR] ${entry.message} (${entry.status})`);
 
   if (env?.DB && ctx?.waitUntil) {
     ctx.waitUntil(persistLogEntry(entry, env));
@@ -93,25 +101,22 @@ export async function getPersistentLogs(env) {
   if (env?.DB) {
     try {
       const { results } = await env.DB.prepare(`
-        SELECT timestamp, level, message, model, key_id AS key, status, duration_ms AS durationMs, details
+        SELECT timestamp, level, message, model, key_id AS key, status, duration_ms AS durationMs
         FROM logs
         ORDER BY timestamp DESC
         LIMIT ?
       `).bind(MAX_PERSISTED_LOGS).all();
 
       if (Array.isArray(results) && results.length > 0) {
-        return results.map((r) => ({
-          ...r,
-          details: r.details ? JSON.parse(r.details) : null,
-        }));
+        return results.slice(0, MAX_PERSISTED_LOGS).map(publicLogEntry);
       }
     } catch (err) {
-      console.error("D1 getPersistentLogs error:", err);
+      console.error("D1 log retrieval failed");
     }
   }
-  return memoryLogs;
+  return getRecentLogs();
 }
 
 export function getRecentLogs() {
-  return memoryLogs;
+  return memoryLogs.map(publicLogEntry);
 }

@@ -1,6 +1,18 @@
 let allLogs = [];
 let renderedLogsCount = 0;
 const LOGS_CHUNK_SIZE = 50;
+const MAX_LOG_DISPLAY_LENGTH = 160;
+
+function displayText(value, limit = MAX_LOG_DISPLAY_LENGTH) {
+  const text = ["string", "number", "boolean"].includes(typeof value) ? String(value) : "";
+  return text.length > limit ? text.slice(0, limit - 3) + "..." : text;
+}
+
+function escapeCell(value, limit = MAX_LOG_DISPLAY_LENGTH) {
+  return displayText(value, limit).replace(/[&<>"']/g, char => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+}
 let currentSortCol = "timestamp";
 let currentSortDir = "desc";
 
@@ -56,7 +68,7 @@ async function loadDashboard() {
     renderModels(data.discovery);
     alignLayout();
 
-    allLogs = data.logs || [];
+    allLogs = Array.isArray(data.logs) ? data.logs.slice(0, 1000) : [];
     document.getElementById("logs-counter").textContent = `${allLogs.length} ENTRIES`;
 
     if (currentSortCol) {
@@ -77,7 +89,7 @@ async function loadDashboard() {
       }, 1000);
     }
   } catch (err) {
-    statusIndicator.textContent = "OFFLINE: " + err.message;
+    statusIndicator.textContent = "OFFLINE: " + displayText(err?.message || "Dashboard unavailable");
   }
 }
 
@@ -121,7 +133,7 @@ function renderOverview(data) {
 
 function formatKeyLabel(id) {
   if (!id) return "KEY";
-  let s = id.trim();
+  let s = displayText(id, 120).trim();
   s = s.replace(/^GEMINI[-_]/i, "").trim();
   return s;
 }
@@ -146,7 +158,7 @@ function renderKeys(keys) {
     }
 
     const cleanId = formatKeyLabel(k.id);
-    return `<div class="key-row"><span>${cleanId}</span><span class="${statusClass}">${statusText}</span></div>`;
+    return `<div class="key-row"><span>${escapeCell(cleanId)}</span><span class="${statusClass}">${escapeCell(statusText)}</span></div>`;
   }).join("");
 }
 
@@ -183,7 +195,7 @@ function alignLayout() {
 function parseStatusFromLog(found) {
   if (!found) return "-";
   if (found.status === 200) return "200";
-  const msg = (found.message || "").toUpperCase();
+  const msg = displayText(found.message).toUpperCase();
   if (msg.includes("RPD")) return "RPD";
   if (msg.includes("TPM")) return "TPM";
   if (msg.includes("RPM")) return "RPM";
@@ -209,7 +221,7 @@ function renderMatrix(matrix, logs = []) {
   const keys = Object.keys(matrix[models[0]] || {});
   thead.innerHTML = `<tr><th class="model-col-header">MODEL \\ KEY</th>${keys.map(k => {
     const compactKey = formatKeyLabel(k);
-    return `<th class="key-col-header" title="${k}">${compactKey}</th>`;
+    return `<th class="key-col-header" title="${escapeCell(k, 120)}">${escapeCell(compactKey, 120)}</th>`;
   }).join("")}</tr>`;
 
   tbody.innerHTML = models.map(m => {
@@ -228,16 +240,16 @@ function renderMatrix(matrix, logs = []) {
       const item = matrix[m][k] || { hits: 0, status: "-" };
       const statusText = item.status || "-";
       const badgeClass = STATUS_MAP[statusText] || (statusText === "-" ? "status-none" : "status-undefined");
-      return `<td class="matrix-cell"><span class="status-badge ${badgeClass}">${statusText}</span></td>`;
+      return `<td class="matrix-cell"><span class="status-badge ${badgeClass}">${escapeCell(statusText, 24)}</span></td>`;
     }).join("");
-    return `<tr><td class="model-name-cell" title="${m}"><strong>${m}</strong></td>${cells}</tr>`;
+    return `<tr><td class="model-name-cell" title="${escapeCell(m, 120)}"><strong>${escapeCell(m, 120)}</strong></td>${cells}</tr>`;
   }).join("");
 }
 
 function renderModels(disc) {
   const renderList = (id, items) => {
     document.getElementById(id).innerHTML = items?.length
-      ? items.map(m => `<li>${m}</li>`).join("")
+      ? items.map(m => `<li>${escapeCell(m, 120)}</li>`).join("")
       : "<li>None</li>";
   };
   renderList("smart-list", disc?.smart);
@@ -251,20 +263,23 @@ function renderNextLogsChunk() {
 
   const nextSlice = allLogs.slice(renderedLogsCount, renderedLogsCount + LOGS_CHUNK_SIZE);
   const rowsHtml = nextSlice.map(l => {
-    let localTime = "—";
+    let localTime = "--";
     if (l.timestamp) {
-      const d = new Date(l.timestamp);
-      localTime = isNaN(d.getTime()) ? l.timestamp : d.toLocaleTimeString();
+      const timestamp = displayText(l.timestamp, 40);
+      const d = new Date(timestamp);
+      localTime = isNaN(d.getTime()) ? timestamp : d.toLocaleTimeString();
     }
+    const level = ["success", "warn", "error"].includes(l.level) ? l.level : "error";
+    const duration = l.durationMs != null ? displayText(l.durationMs, 24) + "ms" : "--";
 
     return `<tr>
-      <td>${localTime}</td>
-      <td class="lvl-${l.level}">${(l.level || "").toUpperCase()}</td>
-      <td>${l.message || ""}</td>
-      <td>${l.model || "—"}</td>
-      <td>${l.key || "—"}</td>
-      <td>${l.status || "—"}</td>
-      <td>${l.durationMs != null ? `${l.durationMs}ms` : "—"}</td>
+      <td>${escapeCell(localTime, 40)}</td>
+      <td class="lvl-${level}">${escapeCell(level.toUpperCase(), 16)}</td>
+      <td>${escapeCell(l.message)}</td>
+      <td>${escapeCell(l.model || "--", 120)}</td>
+      <td>${escapeCell(l.key || "--", 120)}</td>
+      <td>${escapeCell(l.status ?? "--", 24)}</td>
+      <td>${escapeCell(duration, 26)}</td>
     </tr>`;
   }).join("");
 
