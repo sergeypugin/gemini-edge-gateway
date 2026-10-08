@@ -20,7 +20,7 @@ jobs:
           node-version: "lts/*"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Validate JavaScript and run tests
         run: npm run validate

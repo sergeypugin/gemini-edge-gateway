@@ -26,10 +26,12 @@ function captureConsole(t) {
 
 function fakeDatabase(results = []) {
   const writes = [];
+  const updates = [];
   const queries = [];
   const pending = [];
   return {
     writes,
+    updates,
     queries,
     env: {
       DB: {
@@ -38,7 +40,14 @@ function fakeDatabase(results = []) {
           return {
             bind(...values) {
               return {
-                async run() { writes.push(values); },
+                async run() {
+                  if (sql.startsWith("UPDATE logs")) {
+                    updates.push({ sql, values });
+                    return { meta: { changes: 1 } };
+                  }
+                  writes.push(values);
+                  return { meta: { last_row_id: writes.length } };
+                },
                 async all() { return { results }; },
               };
             },
@@ -147,9 +156,9 @@ test("logger bounds console, memory and D1 entries without exposing diagnostics"
   await db.flush();
   assert.equal(db.writes.length, 3);
   assert.equal(db.writes[0][2], "Missing or invalid thought signature");
-  assert.ok(db.writes[0][7].length <= MAX_LOG_DETAILS_LENGTH);
-  assert.ok(db.writes[0][7].includes("INVALID_ARGUMENT"));
-  assert.ok(!db.writes[0][7].includes("sensitive-credential"));
+  assert.ok(db.writes[0][8].length <= MAX_LOG_DETAILS_LENGTH);
+  assert.ok(db.writes[0][8].includes("INVALID_ARGUMENT"));
+  assert.ok(!db.writes[0][8].includes("sensitive-credential"));
   for (const line of output) {
     assert.ok(line.length < 600);
     assert.ok(!line.includes("private prompt"));
@@ -166,17 +175,48 @@ test("logger bounds console, memory and D1 entries without exposing diagnostics"
   assert.equal(getRecentLogs()[0].message, "Success");
 });
 
+test("successful logs save nullable timings and update the original D1 row at stream completion", async t => {
+  captureConsole(t);
+  const db = fakeDatabase();
+  const finish = logSuccess("model", "key", 12, db.env, db.ctx);
+  await db.flush();
+
+  assert.equal(db.writes.length, 1);
+  assert.match(db.queries[0], /ttfb_ms, response_ms/);
+  assert.equal(db.writes[0][6], 12);
+  assert.equal(db.writes[0][7], null);
+
+  await finish(45);
+  assert.deepEqual(db.updates, [{
+    sql: "UPDATE logs SET response_ms = ? WHERE id = ?",
+    values: [45, 1],
+  }]);
+  assert.equal(getRecentLogs()[0].ttfbMs, 12);
+  assert.equal(getRecentLogs()[0].responseMs, 45);
+
+  const unknownFinish = logSuccess("model", "key", null, db.env, db.ctx);
+  await db.flush();
+  await unknownFinish(null);
+  assert.equal(db.writes[1][6], null);
+  assert.equal(db.writes[1][7], null);
+  assert.equal(db.updates.length, 1);
+  assert.equal(getRecentLogs()[0].ttfbMs, null);
+  assert.equal(getRecentLogs()[0].responseMs, null);
+});
+
 test("persistent public logs sanitize legacy rows and ignore malformed raw details", async () => {
   const row = {
     timestamp: "invalid " + "x".repeat(10000), level: "warn", message: signatureMessage,
     model: "model".repeat(10000), key: "key=private-credential", status: 400,
-    durationMs: 25, details: "not JSON: private raw diagnostics", extra: "private extra field",
+    durationMs: 25, ttfbMs: null, responseMs: null, details: "not JSON: private raw diagnostics", extra: "private extra field",
   };
   const db = fakeDatabase(Array.from({ length: 250 }, () => row));
   const logs = await getPersistentLogs(db.env);
   assert.equal(logs.length, 200);
   assert.ok(!db.queries[0].includes("details"));
   assert.equal(logs[0].message, "Missing or invalid thought signature");
+  assert.equal(logs[0].ttfbMs, null);
+  assert.equal(logs[0].responseMs, null);
   for (const entry of logs) assertPublicLog(entry);
   assert.ok(!JSON.stringify(logs).includes("private"));
   assert.ok(!Object.hasOwn(logs[0], "extra"));
@@ -266,7 +306,7 @@ test("dashboard escapes and bounds all log cells and whitelists level classes", 
   const attack = '<img src=x onerror="alert(1)"> & \'quoted\'';
   const log = {
     timestamp: attack, level: 'warn" onclick="alert(1)', message: attack + "x".repeat(10000),
-    model: attack, key: attack, status: attack, durationMs: attack,
+    model: attack, key: attack, status: attack, ttfbMs: attack, responseMs: attack,
   };
   vm.runInContext(`allLogs = ${JSON.stringify([log, { message: {}, level: {}, durationMs: {} }])}; renderNextLogsChunk();`, context);
   assert.equal(rows.length, 1);
@@ -279,6 +319,16 @@ test("dashboard escapes and bounds all log cells and whitelists level classes", 
   assert.ok(rows[0].includes("&#39;"));
   assert.ok(rows[0].length < 2000);
   assert.ok(!rows[0].includes("x".repeat(161)));
+  assert.equal((rows[0].match(/<td>-<\/td>/g) || []).length, 2);
+  vm.runInContext(`allLogs = ${JSON.stringify([
+    { ttfbMs: 20, responseMs: 4, model: "slow-first-byte" },
+    { ttfbMs: 2, responseMs: 30, model: "fast-first-byte" },
+  ])}; sortLogs("ttfbMs", true);`, context);
+  let sortedRows = rows.at(-1).split("</tr>").map(row => row.slice(row.lastIndexOf("<tr>"))).filter(Boolean);
+  assert.ok(sortedRows[0].includes("slow-first-byte"));
+  vm.runInContext(`sortLogs("responseMs", true);`, context);
+  sortedRows = rows.at(-1).split("</tr>").map(row => row.slice(row.lastIndexOf("<tr>"))).filter(Boolean);
+  assert.ok(sortedRows[0].includes("fast-first-byte"));
   vm.runInContext(`renderKeys([{ id: ${JSON.stringify(attack)}, status: ${JSON.stringify(attack)}, isValid: false }]); renderModels({ smart: [${JSON.stringify(attack)}] }); renderMatrix(${JSON.stringify({ [attack]: { [attack]: { status: attack } } })});`, context);
   for (const id of ["keys-status-container", "smart-list", "matrix-table-child"]) {
     assert.ok(!element(id).innerHTML.includes("<img"));
