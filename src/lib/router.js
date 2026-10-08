@@ -3,6 +3,7 @@ import { recordSuccess } from "./analytics.js";
 import { logSuccess, logWarn, logError, getPersistentLogs } from "./logger.js";
 import {
   ONE_HOUR_MS,
+  DAY_HOURS_MS,
   COOLDOWN_503_MS,
   DEFAULT_RPM_DELAY_MS,
   DEFAULT_TIMEOUT_DELAY_MS,

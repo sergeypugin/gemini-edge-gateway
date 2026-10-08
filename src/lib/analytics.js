@@ -1,6 +1,6 @@
 import { getPersistentLogs } from "./logger.js";
 import { getRouterLiveState } from "./router.js";
-import { getTodayMidnightUtc, DEFAULT_TIMEOUT_DELAY_MS } from "./utils.js";
+import { getTodayMidnightUtc, DEFAULT_TIMEOUT_DELAY_MS, DAY_HOURS_MS } from "./utils.js";
 
 let matrix = {};
 let lastResponse = null;
