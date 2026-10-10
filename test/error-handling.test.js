@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { DatabaseSync } from "node:sqlite";
 import gateway from "../src/index.js";
 import { classifyGoogleError } from "../src/lib/utils.js";
+import { saveMatrixStatus } from "../src/lib/router.js";
 import { getPersistentLogs, getRecentLogs, logError, logSuccess, logWarn } from "../src/lib/logger.js";
 import {
   INTERNAL_ERROR_MESSAGE,
@@ -334,4 +336,51 @@ test("dashboard escapes and bounds all log cells and whitelists level classes", 
     assert.ok(!element(id).innerHTML.includes("<img"));
     assert.ok(element(id).innerHTML.includes("&lt;img"));
   }
+});
+
+test("saveMatrixStatus preserves RPD and persistent statuses from transient overwrites", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE matrix_state (
+      model TEXT,
+      key_id TEXT,
+      status TEXT,
+      updated_at INTEGER,
+      PRIMARY KEY (model, key_id)
+    );
+  `);
+
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async run() {
+                db.prepare(sql).run(...args);
+                return { meta: { changes: 1 } };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "RPD", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "RPD");
+
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "TIMEOUT", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "RPD");
+
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "503", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "RPD");
+
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "RPM", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "RPD");
+
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "200", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "200");
+
+  db.close();
 });

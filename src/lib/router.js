@@ -37,7 +37,19 @@ export function saveMatrixStatus(model, keyId, status, env, ctx) {
   const run = () => env.DB.prepare(`
     INSERT INTO matrix_state (model, key_id, status, updated_at)
     VALUES (?, ?, ?, ?)
-    ON CONFLICT(model, key_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+    ON CONFLICT(model, key_id) DO UPDATE SET
+      status = CASE
+        WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
+             AND status IN ('RPD', '404', 'limit: 0', 'KEY_ERR')
+        THEN status
+        ELSE excluded.status
+      END,
+      updated_at = CASE
+        WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
+             AND status IN ('RPD', '404', 'limit: 0', 'KEY_ERR')
+        THEN updated_at
+        ELSE excluded.updated_at
+      END
   `).bind(model, keyId, status, now).run().catch((err) => {
     console.error("saveMatrixStatus error:", err);
   });
@@ -350,9 +362,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         const isTimeout = err?.name == "TimeoutError";
         if (isTimeout) {
           modelCooldowns[model] = Date.now() + DEFAULT_TIMEOUT_DELAY_MS;
-          for (const k of activeKeys) {
-            saveMatrixStatus(model, k.id, "TIMEOUT", env, ctx);
-          }
+          saveMatrixStatus(model, keyItem.id, "TIMEOUT", env, ctx);
           logWarn(model, keyItem.id, 0, `Timeout (${ATTEMPT_TIMEOUT_MS / 1000}s) - Model Frozen`, null, null, env, ctx);
           break;
         }
