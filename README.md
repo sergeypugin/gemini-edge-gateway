@@ -8,7 +8,7 @@
 [![VPN](https://img.shields.io/badge/VPN-Not_Required-2ea44f?style=flat-square)](docs/custom_domain.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-a1ffcb?style=flat-square&labelColor=191919)](CONTRIBUTING.md)
 
-![Gemini Edge Gateway](Attachments/aspen_like_logo.jpg)
+![Gemini Edge Gateway](Attachments/gemini_edge_gateway.jpg)
 
 > Для анализа репозитория с помощью ваших LLM можно использовать сжатую версию контекста через сервис Gitingest: https://gitingest.com/sergeypugin/gemini-edge-gateway.
 
