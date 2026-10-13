@@ -141,6 +141,8 @@ export async function getAnalyticsSnapshot(discoveryData, allKeys, env) {
           status = (dbRow.updated_at >= todayMidnightMs) ? "RPD" : "-";
         } else if (["503", "RPM", "TPM", "TIMEOUT"].includes(effectiveDbStatus)) {
           status = (now - dbRow.updated_at < ttlMs) ? effectiveDbStatus : "-";
+        } else if (["404", "limit: 0"].includes(effectiveDbStatus)) {
+          status = (now - dbRow.updated_at < DAY_HOURS_MS) ? effectiveDbStatus : "-";
         } else {
           status = effectiveDbStatus;
         }

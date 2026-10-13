@@ -387,6 +387,12 @@ test("saveMatrixStatus preserves only current RPD and persistent statuses from t
   saveMatrixStatus("gemini-3.5-flash", "KEY_1", "TIMEOUT", env);
   assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "TIMEOUT");
 
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "404", env);
+  db.prepare("UPDATE matrix_state SET updated_at = ? WHERE key_id = 'KEY_1'")
+    .run(Date.now() - 24 * 60 * 60 * 1000 - 1);
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "TIMEOUT", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "TIMEOUT");
+
   db.close();
 });
 

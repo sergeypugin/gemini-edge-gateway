@@ -23,6 +23,7 @@ const modelCooldowns = {};
 const pairCooldowns = {};
 const deadKeys = new Set();
 const deadModels = new Map();
+const deadModelUpdatedAt = new Map();
 
 const lastRpdUnblock = {};
 let deadInitialized = false;
@@ -30,6 +31,15 @@ let deadInitialized = false;
 let lastSuccessfulKeyId = null;
 let lastSuccessfulSmartModel = null;
 let lastSuccessfulLiteModel = null;
+
+function expireDeadModels(now = Date.now()) {
+  for (const [model, updatedAt] of deadModelUpdatedAt) {
+    if (now - updatedAt >= DAY_HOURS_MS) {
+      deadModels.delete(model);
+      deadModelUpdatedAt.delete(model);
+    }
+  }
+}
 
 export function saveMatrixStatus(model, keyId, status, env, ctx) {
   if (!env?.DB || !model || !keyId) return;
@@ -41,17 +51,17 @@ export function saveMatrixStatus(model, keyId, status, env, ctx) {
     ON CONFLICT(model, key_id) DO UPDATE SET
       status = CASE
         WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
-             AND (status IN ('404', 'limit: 0', 'KEY_ERR') OR (status = 'RPD' AND updated_at >= ?))
+             AND (status = 'KEY_ERR' OR (status IN ('404', 'limit: 0') AND updated_at >= ?) OR (status = 'RPD' AND updated_at >= ?))
         THEN status
         ELSE excluded.status
       END,
       updated_at = CASE
         WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
-             AND (status IN ('404', 'limit: 0', 'KEY_ERR') OR (status = 'RPD' AND updated_at >= ?))
+             AND (status = 'KEY_ERR' OR (status IN ('404', 'limit: 0') AND updated_at >= ?) OR (status = 'RPD' AND updated_at >= ?))
         THEN updated_at
         ELSE excluded.updated_at
       END
-  `).bind(model, keyId, status, now, todayMidnight, todayMidnight).run().catch((err) => {
+  `).bind(model, keyId, status, now, now - DAY_HOURS_MS, todayMidnight, now - DAY_HOURS_MS, todayMidnight).run().catch((err) => {
     console.error("saveMatrixStatus error:", err);
   });
 
@@ -81,11 +91,13 @@ async function ensureDeadState(env) {
           // Кэшируем 404 на 24 часа для автоперепроверки в новые сутки
           if (now - updated_at < DAY_HOURS_MS) {
             deadModels.set(model, "404");
+            deadModelUpdatedAt.set(model, updated_at);
           }
         } else if (status === "limit: 0") {
           // Кэшируем limit: 0 на 24 часа
           if (now - updated_at < DAY_HOURS_MS) {
             deadModels.set(model, "limit: 0");
+            deadModelUpdatedAt.set(model, updated_at);
           }
         } else if (status === "KEY_ERR") {
           deadKeys.add(key_id);
@@ -140,6 +152,7 @@ function prepareSanitizedTemplate(rawText) {
 }
 
 export function getRouterLiveState() {
+  expireDeadModels();
   return {
     modelCooldowns,
     pairCooldowns,
@@ -154,6 +167,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
 
   // Очистка устаревших блокировок в памяти
   const nowMs = Date.now();
+  expireDeadModels(nowMs);
   for (const k of Object.keys(pairCooldowns)) {
     if (pairCooldowns[k] <= nowMs) {
       delete pairCooldowns[k];
@@ -238,6 +252,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
           const errInfo = classifyGoogleError(statusCode, errorObj);
           if (errInfo.type === "NOT_FOUND") {
             deadModels.set(model, "404");
+            deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "404", env, ctx);
             logWarn(model, keyItem.id, statusCode, `Model Deprecated/Not Found (404)`, errorData, ttfbMs, env, ctx, responseMs);
             break;
@@ -245,6 +260,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
 
           if (errInfo.type === "ZERO_QUOTA") {
             deadModels.set(model, "limit: 0");
+            deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "limit: 0", env, ctx);
             logWarn(model, keyItem.id, statusCode, `Zero Free Quota (limit: 0)`, errorData, ttfbMs, env, ctx, responseMs);
             break;
