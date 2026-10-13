@@ -5,6 +5,7 @@ import { executeStratifiedRouting } from "./lib/router.js";
 import { getAnalyticsSnapshot } from "./lib/analytics.js";
 import { logError } from "./lib/logger.js";
 import { INTERNAL_ERROR_MESSAGE } from "./lib/errors.js";
+import { getTodayMidnightUtc } from "./lib/utils.js";
 
 export default {
   async fetch(request, env, ctx) {
@@ -17,6 +18,16 @@ export default {
         headers: { "Content-Type": "application/json" },
       });
     }
+  },
+  async scheduled(_controller, env, ctx) {
+    if (!env?.DB) return;
+    const cleanup = env.DB.prepare(
+      "DELETE FROM matrix_state WHERE status = 'RPD' AND updated_at < ?"
+    ).bind(getTodayMidnightUtc()).run().catch(() => {
+      console.error("D1 stale RPD cleanup failed");
+    });
+    if (ctx?.waitUntil) ctx.waitUntil(cleanup);
+    else await cleanup;
   },
 };
 

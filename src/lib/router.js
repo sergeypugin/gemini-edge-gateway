@@ -34,23 +34,24 @@ let lastSuccessfulLiteModel = null;
 export function saveMatrixStatus(model, keyId, status, env, ctx) {
   if (!env?.DB || !model || !keyId) return;
   const now = Date.now();
+  const todayMidnight = getTodayMidnightUtc();
   const run = () => env.DB.prepare(`
     INSERT INTO matrix_state (model, key_id, status, updated_at)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(model, key_id) DO UPDATE SET
       status = CASE
         WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
-             AND status IN ('RPD', '404', 'limit: 0', 'KEY_ERR')
+             AND (status IN ('404', 'limit: 0', 'KEY_ERR') OR (status = 'RPD' AND updated_at >= ?))
         THEN status
         ELSE excluded.status
       END,
       updated_at = CASE
         WHEN excluded.status NOT IN ('200', 'RPD', '404', 'limit: 0', 'KEY_ERR')
-             AND status IN ('RPD', '404', 'limit: 0', 'KEY_ERR')
+             AND (status IN ('404', 'limit: 0', 'KEY_ERR') OR (status = 'RPD' AND updated_at >= ?))
         THEN updated_at
         ELSE excluded.updated_at
       END
-  `).bind(model, keyId, status, now).run().catch((err) => {
+  `).bind(model, keyId, status, now, todayMidnight, todayMidnight).run().catch((err) => {
     console.error("saveMatrixStatus error:", err);
   });
 

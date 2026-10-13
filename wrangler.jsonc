@@ -8,6 +8,11 @@
   "assets": {
     "directory": "./public"
   },
+  "triggers": {
+    "crons": [
+      "0 0 * * *"
+    ]
+  },
   "placement": {
     "mode": "smart"
   }

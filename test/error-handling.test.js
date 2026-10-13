@@ -338,7 +338,7 @@ test("dashboard escapes and bounds all log cells and whitelists level classes", 
   }
 });
 
-test("saveMatrixStatus preserves RPD and persistent statuses from transient overwrites", () => {
+test("saveMatrixStatus preserves only current RPD and persistent statuses from transient overwrites", () => {
   const db = new DatabaseSync(":memory:");
   db.exec(`
     CREATE TABLE matrix_state (
@@ -382,5 +382,37 @@ test("saveMatrixStatus preserves RPD and persistent statuses from transient over
   saveMatrixStatus("gemini-3.5-flash", "KEY_1", "200", env);
   assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "200");
 
+  db.prepare("UPDATE matrix_state SET status = 'RPD', updated_at = ? WHERE key_id = 'KEY_1'")
+    .run(Date.now() - 24 * 60 * 60 * 1000);
+  saveMatrixStatus("gemini-3.5-flash", "KEY_1", "TIMEOUT", env);
+  assert.equal(db.prepare("SELECT status FROM matrix_state WHERE key_id = 'KEY_1'").get().status, "TIMEOUT");
+
   db.close();
+});
+
+test("scheduled cleanup removes only RPD rows from previous UTC days", async () => {
+  const calls = [];
+  const pending = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(cutoff) {
+            return {
+              async run() {
+                calls.push({ sql, cutoff });
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  await gateway.scheduled(null, env, { waitUntil(promise) { pending.push(promise); } });
+  await Promise.all(pending);
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /DELETE FROM matrix_state WHERE status = 'RPD' AND updated_at < \\?/);
+  assert.equal(new Date(calls[0].cutoff).toISOString().slice(11, 19), "00:00:00");
 });
