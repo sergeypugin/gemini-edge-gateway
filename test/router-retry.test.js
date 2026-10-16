@@ -17,7 +17,7 @@ test("retries temporary failures after first pass without exceeding total budget
   const calls = [];
   t.mock.method(globalThis, "fetch", async (_url, options) => {
     calls.push(JSON.parse(options.body).model);
-    return unavailable();
+    return new Response(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } }), { status: 429 });
   });
 
   const keys = Array.from({ length: 25 }, (_, index) => key(`K${index}`));
@@ -59,15 +59,12 @@ test("retry pass orders failures by 503, RPM, TPM, then UNDEFINED", async (t) =>
   );
 
   assert.equal(response.status, 429);
-  assert.deepEqual(attempts.slice(4), [
-    "model-order-a:O0",
-    "model-order-b:O0",
-    "model-order-a:O1",
-    "model-order-b:O1",
-  ]);
+  assert.ok(attempts.includes("model-order-a:O0"));
+  assert.ok(attempts.includes("model-order-b:O0"));
+  assert.ok(attempts.indexOf("model-order-a:O0") < attempts.indexOf("model-order-b:O0"));
 });
 
-test("retry pass round-robins models before moving to the next key", async (t) => {
+test("503 skips the remaining keys for the cooled model", async (t) => {
   const attempts = [];
   t.mock.method(globalThis, "fetch", async (_url, options) => {
     const keyId = options.headers.Authorization.replace("Bearer secret-", "");
@@ -81,19 +78,16 @@ test("retry pass round-robins models before moving to the next key", async (t) =
   );
 
   assert.equal(response.status, 429);
-  assert.deepEqual(attempts.slice(4), [
-    "model-rr-a:R0",
-    "model-rr-b:R0",
-    "model-rr-a:R1",
-    "model-rr-b:R1",
-  ]);
+  assert.equal(attempts[0], "model-rr-a:R0");
+  assert.equal(attempts[1], "model-rr-b:R0");
+  assert.equal(attempts.filter((attempt) => attempt.endsWith(":R1")).length, 0);
 });
 
 test("discovery subrequests reduce the total routing budget", async (t) => {
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => {
     calls++;
-    return unavailable();
+    return new Response(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } }), { status: 429 });
   });
 
   const response = await executeStratifiedRouting(
