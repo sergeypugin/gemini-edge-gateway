@@ -216,7 +216,12 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
     if (retryPass && retryCandidates.size === 0) break;
 
     const orderedCandidates = retryPass
-      ? RETRY_STATUS_PRIORITY.flatMap((status) => [...retryCandidates.values()].filter((candidate) => candidate.status === status))
+      ? RETRY_STATUS_PRIORITY.flatMap((status) => {
+        const candidates = [...retryCandidates.values()].filter((candidate) => candidate.status === status);
+        return candidateKeys.flatMap((keyItem) =>
+          targetCascade.flatMap((model) => candidates.filter((candidate) => candidate.model === model && candidate.keyItem.id === keyItem.id))
+        );
+      })
       : targetCascade.flatMap((model) => candidateKeys.map((keyItem) => ({ model, keyItem })));
 
     for (const { model, keyItem } of orderedCandidates) {

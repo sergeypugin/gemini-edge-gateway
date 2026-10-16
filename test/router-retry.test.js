@@ -29,7 +29,13 @@ test("retries temporary failures after first pass without exceeding total budget
   assert.equal(calls.length, MAX_TOTAL_SUBREQUESTS);
   assert.equal(calls.slice(0, 40).filter((model) => model === "model-a").length, 25);
   assert.equal(calls.slice(0, 40).filter((model) => model === "model-b").length, 15);
-  assert.equal(calls.slice(40).every((model) => model === "model-a"), true);
+  assert.deepEqual(calls.slice(40), [
+    "model-a", "model-b",
+    "model-a", "model-b",
+    "model-a", "model-b",
+    "model-a", "model-b",
+    "model-a",
+  ]);
 });
 
 test("retry pass orders failures by 503, RPM, TPM, then UNDEFINED", async (t) => {
@@ -58,6 +64,28 @@ test("retry pass orders failures by 503, RPM, TPM, then UNDEFINED", async (t) =>
     "model-order-b:O0",
     "model-order-a:O1",
     "model-order-b:O1",
+  ]);
+});
+
+test("retry pass round-robins models before moving to the next key", async (t) => {
+  const attempts = [];
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    const keyId = options.headers.Authorization.replace("Bearer secret-", "");
+    const model = JSON.parse(options.body).model;
+    attempts.push(`${model}:${keyId}`);
+    return unavailable();
+  });
+
+  const response = await executeStratifiedRouting(
+    request(), body, "user", { smart: ["model-rr-a", "model-rr-b"], lite: [] }, [key("R0"), key("R1")], null, null, 0,
+  );
+
+  assert.equal(response.status, 429);
+  assert.deepEqual(attempts.slice(4), [
+    "model-rr-a:R0",
+    "model-rr-b:R0",
+    "model-rr-a:R1",
+    "model-rr-b:R1",
   ]);
 });
 
