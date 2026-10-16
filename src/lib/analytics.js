@@ -99,10 +99,20 @@ export async function getAnalyticsSnapshot(discoveryData, allKeys, env) {
   for (const model of uniqueModels) {
     formattedMatrix[model] = {};
     const modelUntil = liveState.modelCooldowns[model] || 0;
-    const isModelTimeout = (modelUntil - now > COOLDOWN_503_MS + 5000) ||
-      Object.values(dbStates).some(r => r.model === model && r.status === "TIMEOUT" && (now - r.updated_at < DEFAULT_TIMEOUT_DELAY_MS));
-    const isModel503 = (modelUntil > now && !isModelTimeout) ||
-      Object.values(dbStates).some(r => r.model === model && r.status === "503" && (now - r.updated_at < 60000));
+    const modelCooldownStartedAt = liveState.modelCooldownStartedAt?.[model] || 0;
+    const liveCooldown = modelUntil > now
+      ? { status: liveState.modelCooldownStatus?.[model], updated_at: modelCooldownStartedAt }
+      : null;
+    const dbCooldowns = Object.values(dbStates).filter((row) =>
+      row.model === model && (
+        (row.status === "TIMEOUT" && now - row.updated_at < DEFAULT_TIMEOUT_DELAY_MS) ||
+        (row.status === "503" && now - row.updated_at < 60000)
+      )
+    );
+    const dbCooldown = dbCooldowns.reduce((latest, row) => !latest || row.updated_at > latest.updated_at ? row : latest, null);
+    const modelCooldown = !liveCooldown || (dbCooldown && dbCooldown.updated_at > liveCooldown.updated_at)
+      ? dbCooldown
+      : liveCooldown;
 
     for (const key of allKeys) {
       const pairKey = `${model}:${key.id}`;
@@ -115,6 +125,7 @@ export async function getAnalyticsSnapshot(discoveryData, allKeys, env) {
       const isDeadModel = liveState.deadModels.includes(model) || !!deadModelsFromDb[model];
       const deadReason = (liveState.deadModelsMap && liveState.deadModelsMap[model]) || deadModelsFromDb[model] || "404";
       const isRpdActive = (unlockTime && unlockTime > now) || (dbRow?.status === "RPD" && dbRow.updated_at >= todayMidnightMs);
+      const modelCooldownStatusActive = modelCooldown && (!dbRow || modelCooldown.updated_at >= dbRow.updated_at);
 
       // Иерархия приоритетов статусов ячейки:
       // 1. Мертвая модель (404, limit: 0) -- красит всю строку
@@ -130,10 +141,8 @@ export async function getAnalyticsSnapshot(discoveryData, allKeys, env) {
         status = "KEY_ERR";
       } else if (isRpdActive) {
         status = "RPD";
-      } else if (isModelTimeout) {
-        status = "TIMEOUT";
-      } else if (isModel503) {
-        status = "503";
+      } else if (modelCooldownStatusActive) {
+        status = modelCooldown.status;
       } else if (dbRow) {
         const effectiveDbStatus = dbRow.status === "429" ? "RPM" : dbRow.status;
         const ttlMs = effectiveDbStatus === "TIMEOUT" ? DEFAULT_TIMEOUT_DELAY_MS : 60000;

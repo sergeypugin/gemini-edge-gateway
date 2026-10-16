@@ -22,6 +22,8 @@ const RETRY_STATUS_PRIORITY = ["503", "RPM", "TPM", "TIMEOUT", "UNDEFINED"];
 const ATTEMPT_TIMEOUT_MS = 60 * 1000;
 
 const modelCooldowns = {};
+const modelCooldownStartedAt = {};
+const modelCooldownStatus = {};
 const pairCooldowns = {};
 const deadKeys = new Set();
 const deadModels = new Map();
@@ -157,6 +159,8 @@ export function getRouterLiveState() {
   expireDeadModels();
   return {
     modelCooldowns,
+    modelCooldownStartedAt,
+    modelCooldownStatus,
     pairCooldowns,
     deadKeys: Array.from(deadKeys),
     deadModels: Array.from(deadModels.keys()),
@@ -306,6 +310,8 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
 
           if (errInfo.type === "UNAVAILABLE") {
             modelCooldowns[model] = Date.now() + COOLDOWN_503_MS;
+            modelCooldownStartedAt[model] = Date.now();
+            modelCooldownStatus[model] = "503";
             saveMatrixStatus(model, keyItem.id, "503", env, ctx);
             retryCandidates.set(pairKey, { model, keyItem, status: "503" });
             logWarn(model, keyItem.id, statusCode, `Model Overloaded (503)`, errorData, ttfbMs, env, ctx, responseMs);
@@ -406,6 +412,8 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         const isTimeout = err?.name == "TimeoutError";
         if (isTimeout) {
           modelCooldowns[model] = Date.now() + DEFAULT_TIMEOUT_DELAY_MS;
+          modelCooldownStartedAt[model] = Date.now();
+          modelCooldownStatus[model] = "TIMEOUT";
           saveMatrixStatus(model, keyItem.id, "TIMEOUT", env, ctx);
           if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "TIMEOUT" });
           logWarn(model, keyItem.id, 0, `Timeout (${ATTEMPT_TIMEOUT_MS / 1000}s) - Model Frozen`, null, null, env, ctx);
