@@ -16,7 +16,9 @@ import {
 } from "./utils.js";
 
 const DEFAULT_GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const MAX_SUBREQUESTS = 40;
+export const MAX_TOTAL_SUBREQUESTS = 49;
+const MAX_FIRST_PASS_SUBREQUESTS = 40;
+const RETRY_STATUS_PRIORITY = ["503", "RPM", "TPM", "TIMEOUT", "UNDEFINED"];
 const ATTEMPT_TIMEOUT_MS = 60 * 1000;
 
 const modelCooldowns = {};
@@ -162,7 +164,7 @@ export function getRouterLiveState() {
   };
 }
 
-export async function executeStratifiedRouting(request, rawText, currentUser, cascades, activeKeys, env = null, ctx = null) {
+export async function executeStratifiedRouting(request, rawText, currentUser, cascades, activeKeys, env = null, ctx = null, discoverySubrequestsUsed = 0) {
   await ensureDeadState(env);
 
   // Очистка устаревших блокировок в памяти
@@ -199,27 +201,41 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
   let hadRpmError = false;
   let hadAuthError = false;
   let attemptsCount = 0;
+  const maxAttempts = Math.max(0, MAX_TOTAL_SUBREQUESTS - discoverySubrequestsUsed);
+  const firstPassLimit = Math.min(MAX_FIRST_PASS_SUBREQUESTS, maxAttempts);
+  const retryCandidates = new Map();
+  const attemptedPairs = new Set();
+  const initiallyCooledModels = new Set(targetCascade.filter((model) => modelCooldowns[model] > Date.now()));
+  let retryPass = false;
 
   const basePayload = prepareSanitizedTemplate(rawText);
 
-  // Каскадный перебор: от лучших моделей к базовым
-  for (const model of targetCascade) {
-    if (attemptsCount >= MAX_SUBREQUESTS) break;
-    if (deadModels.has(model)) continue;
+  // First pass follows model and key priority; retry pass reorders only temporary failures.
+  for (let pass = 0; pass < 2; pass++) {
+    retryPass = pass === 1;
+    if (retryPass && retryCandidates.size === 0) break;
 
-    if (modelCooldowns[model] && modelCooldowns[model] > Date.now()) {
-      continue;
-    }
-    const headLimit = Math.min(basePayload.length, 500);
-    const modelReplacedHead = basePayload.slice(0, headLimit).replace(/(?<!\\)"model"\s*:\s*"[^"]*"/, `"model":"${model}"`);
-    const payload = modelReplacedHead + basePayload.slice(headLimit);
-    for (const keyItem of candidateKeys) {
-      if (attemptsCount >= MAX_SUBREQUESTS) break;
-      if (deadKeys.has(keyItem.id)) continue;
+    const orderedCandidates = retryPass
+      ? RETRY_STATUS_PRIORITY.flatMap((status) => [...retryCandidates.values()].filter((candidate) => candidate.status === status))
+      : targetCascade.flatMap((model) => candidateKeys.map((keyItem) => ({ model, keyItem })));
+
+    for (const { model, keyItem } of orderedCandidates) {
+      const passLimit = retryPass ? maxAttempts : firstPassLimit;
+      if (attemptsCount >= passLimit) break;
+      if (deadModels.has(model) || deadKeys.has(keyItem.id)) continue;
+
+      if (!retryPass && initiallyCooledModels.has(model)) {
+        continue;
+      }
 
       const pairKey = `${model}:${keyItem.id}`;
-      if (pairCooldowns[pairKey] && pairCooldowns[pairKey] > Date.now()) continue;
+      if (!retryPass && attemptedPairs.has(pairKey)) continue;
+      if (!retryPass && pairCooldowns[pairKey] && pairCooldowns[pairKey] > Date.now()) continue;
 
+      const headLimit = Math.min(basePayload.length, 500);
+      const modelReplacedHead = basePayload.slice(0, headLimit).replace(/(?<!\\)"model"\s*:\s*"[^"]*"/, `"model":"${model}"`);
+      const payload = modelReplacedHead + basePayload.slice(headLimit);
+      attemptedPairs.add(pairKey);
       attemptsCount++;
       let ttfbMs = null;
       let responseCompletion = Promise.resolve(null);
@@ -255,7 +271,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "404", env, ctx);
             logWarn(model, keyItem.id, statusCode, `Model Deprecated/Not Found (404)`, errorData, ttfbMs, env, ctx, responseMs);
-            break;
+            continue;
           }
 
           if (errInfo.type === "ZERO_QUOTA") {
@@ -263,7 +279,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "limit: 0", env, ctx);
             logWarn(model, keyItem.id, statusCode, `Zero Free Quota (limit: 0)`, errorData, ttfbMs, env, ctx, responseMs);
-            break;
+            continue;
           }
 
           if (errInfo.type === "AUTH") {
@@ -286,8 +302,9 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
           if (errInfo.type === "UNAVAILABLE") {
             modelCooldowns[model] = Date.now() + COOLDOWN_503_MS;
             saveMatrixStatus(model, keyItem.id, "503", env, ctx);
+            retryCandidates.set(pairKey, { model, keyItem, status: "503" });
             logWarn(model, keyItem.id, statusCode, `Model Overloaded (503)`, errorData, ttfbMs, env, ctx, responseMs);
-            break;
+            continue;
           }
 
           if (errInfo.type === "RPD") {
@@ -321,6 +338,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
           if (errInfo.type === "TPM") {
             hadTpmError = true;
             saveMatrixStatus(model, keyItem.id, "TPM", env, ctx);
+            if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "TPM" });
             logWarn(model, keyItem.id, statusCode, `TPM Token Limit`, errorData, ttfbMs, env, ctx, responseMs);
             continue;
           }
@@ -331,12 +349,16 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             const delayMs = parseRetryDelayMs(retryInfo?.retryDelay, DEFAULT_RPM_DELAY_MS);
             pairCooldowns[pairKey] = Date.now() + delayMs;
             saveMatrixStatus(model, keyItem.id, "RPM", env, ctx);
+            if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "RPM" });
             logWarn(model, keyItem.id, statusCode, `RPM Minute Limit (${Math.round(delayMs / 1000)}s)`, errorData, ttfbMs, env, ctx, responseMs);
             continue;
           }
 
           const fallbackStatus = statusCode ? String(statusCode) : "UNDEFINED";
           saveMatrixStatus(model, keyItem.id, fallbackStatus, env, ctx);
+          if (!retryPass && !["404", "limit: 0", "400", "401", "403"].includes(fallbackStatus)) {
+            retryCandidates.set(pairKey, { model, keyItem, status: "UNDEFINED" });
+          }
           const errorMsg = errorObj?.message || errorObj?.status || "API Error";
           logWarn(model, keyItem.id, statusCode, errorMsg, errorData, ttfbMs, env, ctx, responseMs);
           continue;
@@ -380,10 +402,12 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         if (isTimeout) {
           modelCooldowns[model] = Date.now() + DEFAULT_TIMEOUT_DELAY_MS;
           saveMatrixStatus(model, keyItem.id, "TIMEOUT", env, ctx);
+          if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "TIMEOUT" });
           logWarn(model, keyItem.id, 0, `Timeout (${ATTEMPT_TIMEOUT_MS / 1000}s) - Model Frozen`, null, null, env, ctx);
-          break;
+          continue;
         }
         saveMatrixStatus(model, keyItem.id, "UNDEFINED", env, ctx);
+        if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "UNDEFINED" });
         logWarn(model, keyItem.id, 0, err.message, null, ttfbMs, env, ctx);
         continue;
       }

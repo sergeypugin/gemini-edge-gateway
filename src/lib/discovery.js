@@ -8,7 +8,7 @@ const MAX_KEYS_PER_BATCH = 40;
 export async function getDiscoveryData(keys, env = null, forceBatch = false) {
   const now = Date.now();
   if (!forceBatch && CACHED_DATA && (now - LAST_DISCOVERY_TIME < CACHE_TTL_MS)) {
-    return CACHED_DATA;
+    return { ...CACHED_DATA, subrequestsUsed: 0 };
   }
 
   if (!keys || keys.length === 0) {
@@ -40,6 +40,7 @@ export async function getDiscoveryData(keys, env = null, forceBatch = false) {
   }
 
   const validatedResults = [];
+  let subrequestsUsed = 0;
   const keysToValidate = [];
   const keysPending = [];
 
@@ -59,6 +60,7 @@ export async function getDiscoveryData(keys, env = null, forceBatch = false) {
     const batchPromises = keysToValidate.map(async (k) => {
       try {
         const cleanKey = encodeURIComponent(k.key.trim());
+        subrequestsUsed++;
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
           signal: AbortSignal.timeout(5000),
         });
@@ -93,7 +95,7 @@ export async function getDiscoveryData(keys, env = null, forceBatch = false) {
   const activeKeys = validatedResults.filter((k) => k.isValid !== false);
 
   if (activeKeys.length === 0) {
-    if (CACHED_DATA) return CACHED_DATA;
+    if (CACHED_DATA) return { ...CACHED_DATA, subrequestsUsed: 0 };
     throw new Error("All provided GEMINI_KEY entries failed validation via Google API");
   }
 
@@ -102,6 +104,7 @@ export async function getDiscoveryData(keys, env = null, forceBatch = false) {
   if (!CACHED_DATA && activeKeys.length > 0) {
     try {
       const cleanKey = encodeURIComponent(activeKeys[0].key.trim());
+      subrequestsUsed++;
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
         signal: AbortSignal.timeout(5000),
       });
@@ -127,6 +130,7 @@ export async function getDiscoveryData(keys, env = null, forceBatch = false) {
     validatedKeys: validatedResults,
     activeKeys,
     hasMoreUnchecked: keysPending.length > 0,
+    subrequestsUsed,
     lastUpdated: now,
   };
   LAST_DISCOVERY_TIME = now;

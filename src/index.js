@@ -142,7 +142,7 @@ async function handleRequest(request, env, ctx) {
 
     try {
       const discovery = await getDiscoveryData(keys, env);
-      return await executeStratifiedRouting(request, rawBody, authResult.user, discovery, discovery.activeKeys, env, ctx);
+      return await executeStratifiedRouting(request, rawBody, authResult.user, discovery, discovery.activeKeys, env, ctx, discovery.subrequestsUsed);
     } catch (err) {
       logError(INTERNAL_ERROR_MESSAGE, 500, err, env, ctx);
       return new Response(

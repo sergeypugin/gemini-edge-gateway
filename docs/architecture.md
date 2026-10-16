@@ -72,10 +72,10 @@ flowchart TD
         AE -->|404 NOT_FOUND| AF["deadModels.set(404) -> matrix_state: 404 -> break к следующей модели"]
         AE -->|limit: 0 ZERO_QUOTA| AG["deadModels.set(limit: 0) -> matrix_state: limit: 0 -> break к следующей модели"]
         AE -->|400 / 401 / 403 AUTH| AH["deadKeys.add -> matrix_state: KEY_ERR -> keys_cache: is_valid=0 -> continue к ключу"]
-        AE -->|503 UNAVAILABLE| AI["modelCooldowns = now + 10s -> matrix_state: 503 -> break к следующей модели"]
+        AE -->|503 UNAVAILABLE| AI["modelCooldowns = now + 10s -> matrix_state: 503 -> следующая модель; повтор во втором проходе"]
         AE -->|429 RPD| AJ["pairCooldowns = 00:00 UTC (или 01:01 UTC) -> matrix_state: RPD -> continue к ключу"]
-        AE -->|429 RPM| AK["pairCooldowns = now + retryDelay -> matrix_state: RPM -> continue к ключу"]
-        AE -->|429 TPM| AL["Лог WARN -> matrix_state: TPM -> continue к ключу"]
+        AE -->|429 RPM| AK["pairCooldowns = now + retryDelay -> matrix_state: RPM -> continue к ключу; повтор во втором проходе"]
+        AE -->|429 TPM| AL["Лог WARN -> matrix_state: TPM -> continue к ключу; повтор во втором проходе"]
 
         AF --> W
         AG --> W
@@ -85,6 +85,9 @@ flowchart TD
         AK --> Z
         AL --> Z
         AC --> W
+        W --> AV["Второй проход повторяет временные ошибки по приоритету 503 -> RPM -> TPM -> TIMEOUT -> UNDEFINED в остатке общего бюджета до 49 subrequests"]
+        AV -->|Успех| AD
+        AV -->|Нет успешной попытки| AQ
     end
 
     subgraph Storage ["Хранилище Cloudflare D1"]
@@ -98,7 +101,7 @@ flowchart TD
     end
 
     subgraph Failure ["Исчерпание попыток"]
-        W -->|Все попытки исчерпаны >= 40| AQ["HTTP 429 gateway_exhausted с подсказкой"]
+        W -->|Все попытки исчерпаны| AQ["HTTP 429 gateway_exhausted с подсказкой"]
     end
 ```
 
