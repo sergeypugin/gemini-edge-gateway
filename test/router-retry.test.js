@@ -64,7 +64,7 @@ test("retry pass orders failures by 503, RPM, TPM, then UNDEFINED", async (t) =>
   assert.ok(attempts.indexOf("model-order-a:O0") < attempts.indexOf("model-order-b:O0"));
 });
 
-test("503 skips the remaining keys for the cooled model", async (t) => {
+test("503 switches models first and retries remaining keys within the budget", async (t) => {
   const attempts = [];
   t.mock.method(globalThis, "fetch", async (_url, options) => {
     const keyId = options.headers.Authorization.replace("Bearer secret-", "");
@@ -80,7 +80,9 @@ test("503 skips the remaining keys for the cooled model", async (t) => {
   assert.equal(response.status, 429);
   assert.equal(attempts[0], "model-rr-a:R0");
   assert.equal(attempts[1], "model-rr-b:R0");
-  assert.equal(attempts.filter((attempt) => attempt.endsWith(":R1")).length, 0);
+  assert.ok(attempts.includes("model-rr-a:R1"));
+  assert.ok(attempts.includes("model-rr-b:R1"));
+  assert.ok(attempts.indexOf("model-rr-a:R0") < attempts.indexOf("model-rr-a:R1"));
 });
 
 test("discovery subrequests reduce the total routing budget", async (t) => {

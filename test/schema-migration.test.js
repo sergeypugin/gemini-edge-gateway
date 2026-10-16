@@ -6,8 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 
 const baselinePath = fileURLToPath(new URL("../db/schema.sql", import.meta.url));
 const migrationPath = fileURLToPath(new URL("../db/migrations/0001_v1_to_v2_split_log_timings.sql", import.meta.url));
+const requestIdMigrationPath = fileURLToPath(new URL("../db/migrations/0002_v2_to_v3_add_request_id.sql", import.meta.url));
 const baseline = readFileSync(baselinePath, "utf8");
 const migration = readFileSync(migrationPath, "utf8");
+const requestIdMigration = readFileSync(requestIdMigrationPath, "utf8");
 
 function getColumns(db) {
   return db.prepare("PRAGMA table_info(logs)").all().map(row => row.name);
@@ -28,6 +30,19 @@ test("0001 adds nullable timing columns and drops duration_ms", () => {
       "ALTER TABLE logs DROP COLUMN duration_ms",
     ],
   );
+});
+
+test("0002 v2 to v3 adds request IDs and an index", () => {
+  assert.match(requestIdMigration, /ALTER TABLE logs ADD COLUMN request_id TEXT/);
+  assert.match(requestIdMigration, /CREATE INDEX IF NOT EXISTS idx_logs_request_id/);
+
+  const db = new DatabaseSync(":memory:");
+  db.exec(baseline);
+  db.exec(migration);
+  db.exec(requestIdMigration);
+  assert.ok(getColumns(db).includes("request_id"));
+  assert.deepEqual(db.prepare("PRAGMA index_list(logs)").all().map(row => row.name), ["idx_logs_request_id", "idx_logs_timestamp"]);
+  db.close();
 });
 
 test("baseline and migration preserve existing rows and leave new timings null", () => {

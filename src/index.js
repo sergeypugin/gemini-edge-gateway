@@ -9,10 +9,11 @@ import { getTodayMidnightUtc } from "./lib/utils.js";
 
 export default {
   async fetch(request, env, ctx) {
+    const requestId = crypto.randomUUID();
     try {
-      return await handleRequest(request, env, ctx);
+      return await handleRequest(request, env, ctx, requestId);
     } catch (err) {
-      logError(INTERNAL_ERROR_MESSAGE, 500, err, env, ctx);
+      logError(INTERNAL_ERROR_MESSAGE, 500, err, env, ctx, null, null, requestId);
       return new Response(JSON.stringify({ error: { message: INTERNAL_ERROR_MESSAGE, type: "internal_server_error", code: 500 } }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -31,7 +32,7 @@ export default {
   },
 };
 
-async function handleRequest(request, env, ctx) {
+async function handleRequest(request, env, ctx, requestId) {
   const url = new URL(request.url);
   const { keys, authorizedUsers } = parseConfig(env);
 
@@ -73,7 +74,7 @@ async function handleRequest(request, env, ctx) {
         },
       });
     } catch (e) {
-      logError(INTERNAL_ERROR_MESSAGE, 500, e, env, ctx);
+      logError(INTERNAL_ERROR_MESSAGE, 500, e, env, ctx, null, null, requestId);
       return new Response(JSON.stringify({ error: INTERNAL_ERROR_MESSAGE }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -142,9 +143,9 @@ async function handleRequest(request, env, ctx) {
 
     try {
       const discovery = await getDiscoveryData(keys, env);
-      return await executeStratifiedRouting(request, rawBody, authResult.user, discovery, discovery.activeKeys, env, ctx, discovery.subrequestsUsed);
+      return await executeStratifiedRouting(request, rawBody, authResult.user, discovery, discovery.activeKeys, env, ctx, discovery.subrequestsUsed, requestId);
     } catch (err) {
-      logError(INTERNAL_ERROR_MESSAGE, 500, err, env, ctx);
+      logError(INTERNAL_ERROR_MESSAGE, 500, err, env, ctx, null, null, requestId);
       return new Response(
         JSON.stringify({
           error: {

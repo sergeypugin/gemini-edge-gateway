@@ -168,7 +168,7 @@ export function getRouterLiveState() {
   };
 }
 
-export async function executeStratifiedRouting(request, rawText, currentUser, cascades, activeKeys, env = null, ctx = null, discoverySubrequestsUsed = 0) {
+export async function executeStratifiedRouting(request, rawText, currentUser, cascades, activeKeys, env = null, ctx = null, discoverySubrequestsUsed = 0, requestId = null) {
   await ensureDeadState(env);
 
   // Очистка устаревших блокировок в памяти
@@ -232,7 +232,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
     for (const { model, keyItem } of orderedCandidates) {
       const passLimit = retryPass ? maxAttempts : firstPassLimit;
       if (attemptsCount >= passLimit) break;
-      if (deadModels.has(model) || deadKeys.has(keyItem.id) || skippedModelsInPass.has(model)) continue;
+      if (deadModels.has(model) || deadKeys.has(keyItem.id) || (!retryPass && skippedModelsInPass.has(model))) continue;
 
       if (!retryPass && initiallyCooledModels.has(model)) {
         continue;
@@ -280,7 +280,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             deadModels.set(model, "404");
             deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "404", env, ctx);
-            logWarn(model, keyItem.id, statusCode, `Model Deprecated/Not Found (404)`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `Model Deprecated/Not Found (404)`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -288,7 +288,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             deadModels.set(model, "limit: 0");
             deadModelUpdatedAt.set(model, Date.now());
             saveMatrixStatus(model, keyItem.id, "limit: 0", env, ctx);
-            logWarn(model, keyItem.id, statusCode, `Zero Free Quota (limit: 0)`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `Zero Free Quota (limit: 0)`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -296,7 +296,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             hadAuthError = true;
             deadKeys.add(keyItem.id);
             saveMatrixStatus(model, keyItem.id, "KEY_ERR", env, ctx);
-            logWarn(model, keyItem.id, statusCode, `Auth Error (Invalid Key)`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `Auth Error (Invalid Key)`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             if (env?.DB && ctx?.waitUntil) {
               ctx.waitUntil(
                 env.DB.prepare(`
@@ -316,7 +316,13 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             skippedModelsInPass.add(model);
             saveMatrixStatus(model, keyItem.id, "503", env, ctx);
             retryCandidates.set(pairKey, { model, keyItem, status: "503" });
-            logWarn(model, keyItem.id, statusCode, `Model Overloaded (503)`, errorData, ttfbMs, env, ctx, responseMs);
+            for (const retryKey of candidateKeys) {
+              const retryPairKey = `${model}:${retryKey.id}`;
+              if (!deadKeys.has(retryKey.id) && (!pairCooldowns[retryPairKey] || pairCooldowns[retryPairKey] <= Date.now())) {
+                retryCandidates.set(retryPairKey, { model, keyItem: retryKey, status: "503" });
+              }
+            }
+            logWarn(model, keyItem.id, statusCode, `Model Overloaded (503)`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -344,7 +350,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             pairCooldowns[pairKey] = unlockTime;
             lastRpdUnblock[pairKey] = unlockTime;
             saveMatrixStatus(model, keyItem.id, "RPD", env, ctx);
-            logWarn(model, keyItem.id, statusCode, `RPD Daily Limit`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `RPD Daily Limit`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -352,7 +358,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             hadTpmError = true;
             saveMatrixStatus(model, keyItem.id, "TPM", env, ctx);
             if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "TPM" });
-            logWarn(model, keyItem.id, statusCode, `TPM Token Limit`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `TPM Token Limit`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -363,7 +369,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             pairCooldowns[pairKey] = Date.now() + delayMs;
             saveMatrixStatus(model, keyItem.id, "RPM", env, ctx);
             if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "RPM" });
-            logWarn(model, keyItem.id, statusCode, `RPM Minute Limit (${Math.round(delayMs / 1000)}s)`, errorData, ttfbMs, env, ctx, responseMs);
+            logWarn(model, keyItem.id, statusCode, `RPM Minute Limit (${Math.round(delayMs / 1000)}s)`, errorData, ttfbMs, env, ctx, responseMs, requestId);
             continue;
           }
 
@@ -373,11 +379,11 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
             retryCandidates.set(pairKey, { model, keyItem, status: "UNDEFINED" });
           }
           const errorMsg = errorObj?.message || errorObj?.status || "API Error";
-          logWarn(model, keyItem.id, statusCode, errorMsg, errorData, ttfbMs, env, ctx, responseMs);
+          logWarn(model, keyItem.id, statusCode, errorMsg, errorData, ttfbMs, env, ctx, responseMs, requestId);
           continue;
         }
 
-        const updateSuccessResponseTime = logSuccess(model, keyItem.id, ttfbMs, env, ctx);
+        const updateSuccessResponseTime = logSuccess(model, keyItem.id, ttfbMs, env, ctx, requestId);
         const responseTimeUpdate = responseCompletion.then(updateSuccessResponseTime);
         if (ctx?.waitUntil) ctx.waitUntil(responseTimeUpdate);
         else responseTimeUpdate.catch(() => { });
@@ -395,7 +401,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
         if (response.body) {
           response.body.pipeTo(streamPipeline.writable).catch((err) => {
             if (!request.signal.aborted) {
-              logWarn(model, keyItem.id, 0, "Upstream stream interrupted", err, ttfbMs, env, ctx);
+              logWarn(model, keyItem.id, 0, "Upstream stream interrupted", err, ttfbMs, env, ctx, null, requestId);
             }
           });
         }
@@ -418,13 +424,21 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
           modelCooldownStatus[model] = "TIMEOUT";
           skippedModelsInPass.add(model);
           saveMatrixStatus(model, keyItem.id, "TIMEOUT", env, ctx);
-          if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "TIMEOUT" });
-          logWarn(model, keyItem.id, 0, `Timeout (${ATTEMPT_TIMEOUT_MS / 1000}s) - Model Frozen`, null, null, env, ctx);
+          if (!retryPass) {
+            retryCandidates.set(pairKey, { model, keyItem, status: "TIMEOUT" });
+            for (const retryKey of candidateKeys) {
+              const retryPairKey = `${model}:${retryKey.id}`;
+              if (!deadKeys.has(retryKey.id) && (!pairCooldowns[retryPairKey] || pairCooldowns[retryPairKey] <= Date.now())) {
+                retryCandidates.set(retryPairKey, { model, keyItem: retryKey, status: "TIMEOUT" });
+              }
+            }
+          }
+          logWarn(model, keyItem.id, 0, `Timeout (${ATTEMPT_TIMEOUT_MS / 1000}s) - Model Frozen`, null, null, env, ctx, null, requestId);
           continue;
         }
         saveMatrixStatus(model, keyItem.id, "UNDEFINED", env, ctx);
         if (!retryPass) retryCandidates.set(pairKey, { model, keyItem, status: "UNDEFINED" });
-        logWarn(model, keyItem.id, 0, err.message, null, ttfbMs, env, ctx);
+        logWarn(model, keyItem.id, 0, err.message, null, ttfbMs, env, ctx, null, requestId);
         continue;
       }
     }
@@ -450,7 +464,7 @@ export async function executeStratifiedRouting(request, rawText, currentUser, ca
     errorReason = "UNDEFINED";
   }
 
-  logError(errorReason, 429, attemptsCount, env, ctx);
+  logError(errorReason, 429, attemptsCount, env, ctx, null, null, requestId);
 
   return new Response(
     JSON.stringify({

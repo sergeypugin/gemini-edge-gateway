@@ -126,7 +126,7 @@ npx wrangler dev --remote
 
 2. **Через Wrangler CLI** (локально из терминала проекта):
    ```bash
-   npx wrangler d1 execute gemini-gateway-db --remote --command "SELECT model, status, COUNT(*) as count FROM logs GROUP BY model, status;"
+   npx wrangler d1 execute gemini-gateway-db --remote --command "SELECT request_id, timestamp, model, key_id, status, message FROM logs WHERE request_id IS NOT NULL ORDER BY timestamp DESC LIMIT 100;"
    ```
 
 ## Pull Requests are Welcome

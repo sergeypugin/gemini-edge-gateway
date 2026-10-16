@@ -27,8 +27,8 @@ async function persistLogEntry(entry, env) {
   if (!env?.DB) return;
   try {
     return await env.DB.prepare(`
-      INSERT INTO logs (timestamp, level, message, model, key_id, status, ttfb_ms, response_ms, details)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO logs (timestamp, level, message, model, key_id, status, ttfb_ms, response_ms, details, request_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       entry.timestamp,
       entry.level,
@@ -38,7 +38,8 @@ async function persistLogEntry(entry, env) {
       entry.status ?? null,
       normalizeDuration(entry.ttfbMs),
       normalizeDuration(entry.responseMs),
-      entry.details ? JSON.stringify(entry.details) : null
+      entry.details ? JSON.stringify(entry.details) : null,
+      entry.requestId || null
     ).run();
   } catch (err) {
     console.error("D1 log persistence failed");
@@ -55,7 +56,7 @@ function pushMemoryLog(entry) {
 }
 
 // Успешный запрос
-export function logSuccess(model, keyId, ttfbMs, env = null, ctx = null) {
+export function logSuccess(model, keyId, ttfbMs, env = null, ctx = null, requestId = null) {
   const entry = {
     timestamp: new Date().toISOString(),
     level: "success",
@@ -65,6 +66,7 @@ export function logSuccess(model, keyId, ttfbMs, env = null, ctx = null) {
     status: 200,
     ttfbMs: normalizeDuration(ttfbMs),
     responseMs: null,
+    requestId,
   };
   const publicEntry = pushMemoryLog(entry);
 
@@ -91,11 +93,12 @@ export function logSuccess(model, keyId, ttfbMs, env = null, ctx = null) {
   };
 }
 
-export function logWarn(model, keyId, status, message, rawDetails = null, ttfbMs = null, env = null, ctx = null, responseMs = null) {
+export function logWarn(model, keyId, status, message, rawDetails = null, ttfbMs = null, env = null, ctx = null, responseMs = null, requestId = null) {
   const entry = {
     ...publicLogEntry({ level: "warn", message, model, key: keyId, status, ttfbMs, responseMs }),
     timestamp: new Date().toISOString(),
     details: sanitizeErrorDetails(message, rawDetails),
+    requestId,
   };
 
   pushMemoryLog(entry);
@@ -107,11 +110,12 @@ export function logWarn(model, keyId, status, message, rawDetails = null, ttfbMs
 }
 
 // Критический отказ шлюза
-export function logError(message, status = 429, rawDetails = null, env = null, ctx = null, ttfbMs = null, responseMs = null) {
+export function logError(message, status = 429, rawDetails = null, env = null, ctx = null, ttfbMs = null, responseMs = null, requestId = null) {
   const entry = {
     ...publicLogEntry({ level: "error", message, status, ttfbMs, responseMs }),
     timestamp: new Date().toISOString(),
     details: sanitizeErrorDetails(message, rawDetails),
+    requestId,
   };
 
   pushMemoryLog(entry);
